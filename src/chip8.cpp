@@ -278,13 +278,13 @@ void Chip8::emulate_cycle(){
                 }
                     break;
                 case 0x0055: // FX55 - store v[0] to v[x] in memory starting from index
-                    for(int i=0; i<((opcode & 0x0F00) >> 8); i++){
+                    for(int i=0; i<=((opcode & 0x0F00) >> 8); i++){
                         memory[index+i] = v[i];
                     }
                     pc += 2;
                     break;
                 case 0x0065: // FX65 - Fill v[0] to v[x] from memory starting at index
-                    for(int i=0; i<((opcode & 0x0F00) >> 8); i++){
+                    for(int i=0; i<=((opcode & 0x0F00) >> 8); i++){
                         v[i] = memory[index+i];
                     }
                     pc += 2;
