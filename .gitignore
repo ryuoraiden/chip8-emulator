@@ -1,1 +1,6 @@
-.vscode/
+# build outputs
+*.o
+chip8
+
+# local secrets
+.env
