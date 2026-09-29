@@ -84,8 +84,7 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 case 0x00EE: // Returns from subroutine
-                    pc = stack[sp];
-                    sp--;
+                    pc = stack[--sp];
                     pc += 2;
                     break;
                 default:
@@ -97,8 +96,7 @@ void Chip8::emulate_cycle(){
             pc = opcode & 0x0FFF;
             break;
         case 0x2000: // 2XXX = Call subroutine at XXX
-            stack[sp] = pc;
-            sp++;
+            stack[sp++] = pc;
             pc = opcode & 0x0FFF;
             break;
         case 0x3000: // 3XNN = Skip next instruction if v[x] = NN
