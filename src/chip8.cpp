@@ -272,7 +272,7 @@ void Chip8::emulate_cycle(){
                 case 0x0033:{ // FX33 - store BCD representation of v[x] at index
                     uint8_t value = v[(opcode & 0x0F00) >> 8];
                     memory[index] = value/100;
-                    memory[index+1] = value/10;
+                    memory[index+1] = (value/10)%10;
                     memory[index+2] = value%10;
                     pc += 2;
                 }
