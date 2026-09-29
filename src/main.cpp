@@ -64,7 +64,7 @@ void draw_graphics(SDL_Renderer* renderer, Chip8& chip8){
     for(int y=0; y<32; y++){
         for(int x=0; x<64; x++){
             if(chip8.display[x + (y*64)] == 1){
-                SDL_Rect rect = {x*SCALE, (31-y)*SCALE, SCALE, SCALE};
+                SDL_Rect rect = {x*SCALE, y*SCALE, SCALE, SCALE};
                 SDL_RenderFillRect(renderer, &rect);
             }
         }
