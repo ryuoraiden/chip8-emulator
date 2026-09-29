@@ -81,7 +81,7 @@ void Chip8::update_timers(){
 }
 
 void Chip8::emulate_cycle(){
-    opcode = memory[pc] << 8 | memory[pc+1]; // 16-bit instruction
+    opcode = memory[pc & 0xFFF] << 8 | memory[(pc+1) & 0xFFF]; // 16-bit instruction
 
     switch(opcode & 0xF000){ // Gets only the first 4 bits
         case 0x0000:
@@ -226,7 +226,7 @@ void Chip8::emulate_cycle(){
             v[0xF] = 0; // Resetting collision flag
             // Looping through each row of the sprite
             for(int y_line=0; y_line<height; y_line++){
-                pixel = memory[index + y_line]; // One row of sprite data
+                pixel = memory[(index + y_line) & 0xFFF]; // One row of sprite data
                 // Now looping through each pixel in the row (8)
                 for(int x_line=0; x_line<8; x_line++){
                     // Check if current pixel is 1
@@ -298,21 +298,21 @@ void Chip8::emulate_cycle(){
                     break;
                 case 0x0033:{ // FX33 - store BCD representation of v[x] at index
                     uint8_t value = v[(opcode & 0x0F00) >> 8];
-                    memory[index] = value/100;
-                    memory[index+1] = (value/10)%10;
-                    memory[index+2] = value%10;
+                    memory[index & 0xFFF] = value/100;
+                    memory[(index+1) & 0xFFF] = (value/10)%10;
+                    memory[(index+2) & 0xFFF] = value%10;
                     pc += 2;
                 }
                     break;
                 case 0x0055: // FX55 - store v[0] to v[x] in memory starting from index
                     for(int i=0; i<=((opcode & 0x0F00) >> 8); i++){
-                        memory[index+i] = v[i];
+                        memory[(index+i) & 0xFFF] = v[i];
                     }
                     pc += 2;
                     break;
                 case 0x0065: // FX65 - Fill v[0] to v[x] from memory starting at index
                     for(int i=0; i<=((opcode & 0x0F00) >> 8); i++){
-                        v[i] = memory[index+i];
+                        v[i] = memory[(index+i) & 0xFFF];
                     }
                     pc += 2;
                     break;
