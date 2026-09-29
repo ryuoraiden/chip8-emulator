@@ -72,6 +72,14 @@ void Chip8::load_rom(const std::string& filename){
     std::cout << "Loaded ROM: " << filename << std::endl;
 }
 
+void Chip8::update_timers(){
+    if(delay_timer > 0) delay_timer--;
+    if(sound_timer > 0){
+        if(sound_timer == 1) std::cout << "BEEP!" << std::endl;
+        sound_timer--;
+    }
+}
+
 void Chip8::emulate_cycle(){
     opcode = memory[pc] << 8 | memory[pc+1]; // 16-bit instruction
 
@@ -298,11 +306,5 @@ void Chip8::emulate_cycle(){
             std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
             pc += 2;
             break;
-    }
-    // We now update the timers
-    if(delay_timer > 0) delay_timer--;
-    if(sound_timer > 0){
-        if(sound_timer == 1) std::cout << "BEEP!" << std::endl;
-        sound_timer--;
     }
 }

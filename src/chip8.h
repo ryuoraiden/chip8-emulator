@@ -9,6 +9,7 @@ class Chip8{
         Chip8();
         void load_rom(const std::string& filename); // To load a game file
         void emulate_cycle(); // To execute one instruction
+        void update_timers(); // Decrement delay/sound timers
         bool draw_flag; // When we need to redraw the screen;
         uint8_t display[64*32];
         uint8_t key[16]; // Keyboard of 16 keys
