@@ -116,8 +116,15 @@ void Chip8::emulate_cycle(){
             else pc += 2;
             break;
         case 0x5000:  // 5XY0 - Skip next instruction if v[x] == v[y]
-            if (v[(opcode & 0x0F00) >> 8] == v[(opcode & 0x00F0) >> 4]) pc += 4;
-            else pc += 2;
+            if ((opcode & 0x000F) == 0) {
+                if (v[(opcode & 0x0F00) >> 8] == v[(opcode & 0x00F0) >> 4]) 
+                    pc += 4;
+                else 
+                    pc += 2;
+            } else {
+                std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
+                pc += 2;
+            }
             break;
         case 0x6000: // 6XNN = set v[n] = NN
             v[(opcode & 0x0F00) >> 8] = opcode & 0x00FF;
@@ -138,36 +145,43 @@ void Chip8::emulate_cycle(){
                     v[(opcode & 0x0F00) >> 8] |= v[(opcode & 0x00F0) >> 4];
                     pc += 2;
                     break;
-                case 0x0002: // v[x] = v[y] & v[y]
+                case 0x0002: // v[x] = v[x] & v[y]
                     v[(opcode & 0x0F00) >> 8] &= v[(opcode & 0x00F0) >> 4];
                     pc += 2;
                     break;
-                case 0x0003: // v[x] = v[y] ^ v[y]
+                case 0x0003: // v[x] = v[x] ^ v[y]
                     v[(opcode & 0x0F00) >> 8] ^= v[(opcode & 0x00F0) >> 4];
                     pc += 2;
                     break;
                 case 0x0004:{ // v[x] += v[y], v[F] = carry
                     uint16_t sum = v[(opcode & 0x0F00) >> 8] + v[(opcode & 0x00F0) >> 4];
-                    v[0xF] = (sum > 0xFF) ? 1: 0;   
-                    v[(opcode & 0x0F00) >> 8] = sum & 0xFF;   
-                    pc += 2;          
+                    v[(opcode & 0x0F00) >> 8] = sum & 0xFF;
+                    v[0xF] = (sum > 0xFF) ? 1 : 0;
+                    pc += 2;
                 }
                     break;
-                case 0x0005: // v[x] -= v[y], v[F] = NOT(borrow)
-                    v[0xF] = (v[(opcode & 0x0F00) >> 8] > v[(opcode & 0x00F0) >> 4]) ? 1 : 0;
-                    v[(opcode & 0x0F00) >> 8] -= v[(opcode & 0x00F0) >> 4];
+                case 0x0005: { // v[x] -= v[y], v[F] = NOT(borrow)
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    uint8_t vy = v[(opcode & 0x00F0) >> 4];
+                    v[(opcode & 0x0F00) >> 8] = vx - vy;
+                    v[0xF] = (vx >= vy) ? 1 : 0;
                     pc += 2;
                     break;
-                case 0x0006: // v[x] >>= 1, v[F] = LSB
+                }
+                case 0x0006: { // v[x] >>= 1, v[F] = LSB
                     v[0xF] = v[(opcode & 0x0F00) >> 8] & 0x1;
                     v[(opcode & 0x0F00) >> 8] >>= 1;
                     pc += 2;
                     break;
-                case 0x0007: // v[x] = v[y] - v[x], v[F] = NOT(borrow)
-                    v[0xF] = (v[(opcode & 0x00F0) >> 4] > v[(opcode & 0x0F00) >> 8]) ? 1 : 0;
-                    v[(opcode & 0x0F00) >> 8] = v[(opcode & 0x00F0) >> 4] - v[(opcode & 0x0F00) >> 8];
+                }
+                case 0x0007: { // v[x] = v[y] - v[x], v[F] = NOT(borrow)
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    uint8_t vy = v[(opcode & 0x00F0) >> 4];
+                    v[(opcode & 0x0F00) >> 8] = vy - vx;
+                    v[0xF] = (vy >= vx) ? 1 : 0;
                     pc += 2;
                     break;
+                }
                 case 0x000E: // v[x] <<= 1, v[F] = MSB
                     v[0xF] = v[(opcode & 0x0F00) >> 8] >> 7;  // Save MSB
                     v[(opcode & 0x0F00) >> 8] <<= 1;
@@ -180,10 +194,15 @@ void Chip8::emulate_cycle(){
             }
             break;
         case 0x9000: // 9XY0 = Skip next instr. if v[x] != v[y]
-            if (v[(opcode & 0x0F00) >> 8] != v[(opcode & 0x00F0) >> 4])
-                pc += 4;
-            else
+            if ((opcode & 0x000F) == 0) {
+                if (v[(opcode & 0x0F00) >> 8] != v[(opcode & 0x00F0) >> 4])
+                    pc += 4;
+                else
+                    pc += 2;
+            } else {
+                std::cerr << "Unknwon opcode: 0x" << std::hex << opcode << std::endl;
                 pc += 2;
+            }
             break;
         case 0xA000: // AXXX = set index to XXX
             index = opcode & 0x0FFF;
