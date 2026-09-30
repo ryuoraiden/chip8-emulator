@@ -277,7 +277,8 @@ void Chip8::emulate_cycle(){
                             break;
                         }
                     }
-                    pc += 2;
+                    // No key held: leave pc alone so this instruction runs again next cycle
+                    if(key_pressed) pc += 2;
                 }
                     break;
                 case 0x0015: // FX15 - delay_timer = v[x]
