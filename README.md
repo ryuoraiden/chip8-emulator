@@ -2,7 +2,7 @@
 
 A Chip-8 emulator built in C++ with SDL2 graphics and audio support.
 
-> **TatHack '26 submission (PS1).** We started from the organizers' partially broken emulator, fixed the planted bugs in opcode handling, memory, timing and rendering, and added speed control, color palettes and save states. See [Bugs fixed](#bugs-fixed) and [AI usage](AI_USAGE.md).
+> **TatHack '26 submission (PS1).** We started from the organizers' partially broken emulator, fixed the planted bugs in opcode handling, memory, timing and rendering, and added speed control, color palettes and save states. See [Bugs Fixed](#bugs-fixed).
 
 ## Features
 
@@ -178,7 +178,7 @@ The main loop uses a fixed timestep. Real elapsed time is accumulated, and one e
 Graphics are rendered using SDL2:
 - Each Chip-8 pixel is scaled 10× for visibility (640×320 window)
 - XOR-based sprite drawing for collision detection
-- Sprites wrap at their start position and clip at the screen edges
+- Sprites wrap around the screen edges: a sprite running off the right edge continues on the left, and off the bottom continues at the top
 
 ### Audio
 
@@ -186,16 +186,36 @@ A 440 Hz square wave (musical note A) plays while `sound_timer > 0`. The audio b
 
 ## Bugs Fixed
 
+### Planted bugs
+
 | Area | Bug | Fix |
 |---|---|---|
-| 00EE (return) | Read the stack before decrementing `sp`, so returns jumped to `0x2` | Decrement first: `stack[--sp]` |
-| FX33 (BCD) | Tens digit stored as `value/10` (123 gave 1, 12, 3) | `(value/10) % 10` |
-| FX55 / FX65 | Loop stopped before VX | Loop through VX inclusive |
-| FX0A (wait for key) | Advanced even with no key held | Only advance `pc` once a key is found |
+| 00EE (return) | Read the stack before decrementing `sp`, so every return jumped to `0x2` | Decrement first: `stack[--sp]` |
+| FX33 (BCD) | Tens digit stored as `value/10`, so 123 became 1, 12, 3 | `(value/10) % 10` |
+| FX55 / FX65 | Loops used `<`, so VX itself was never saved or loaded | Loop through VX inclusive (`<=`) |
+| FX0A (wait for key) | Advanced `pc` even with no key held (flagged by a compiler warning: `key_pressed` set but unused) | Only advance `pc` once a key is found, so the instruction repeats until then |
 | Rendering | Screen drawn upside down (`31 - y`) | Row 0 at the top |
-| Timing | A 16 ms delay after every instruction (about 60 instructions/s) and timers ticking per instruction | Fixed 60 Hz timestep, timers ticked once per frame |
-| Audio | Square wave flipped every 100 samples (about 220 Hz) | Derived from `TONE_HZ = 440` |
-| 8XY4-8XYE | VF written before the result; `>` instead of `>=` for borrow | Result first, flag last; `>=` |
+| Timing | A 16 ms delay after every instruction (about 60 instructions/s instead of about 600), and timers ticking once per instruction instead of at 60 Hz | Fixed 60 Hz timestep; timers ticked once per frame |
+| Audio | Square wave flipped every 100 samples, giving about 220 Hz instead of the documented 440 Hz | Half-wave length derived from `TONE_HZ = 440` |
+| 8XY4 / 8XY5 / 8XY6 / 8XY7 / 8XYE | VF written before the result, so it was lost when X is F; `>` instead of `>=` for the borrow flag | Result first, flag last; `>=` |
+
+### Other bugs we found and fixed
+
+| Area | Bug | Fix |
+|---|---|---|
+| 5XY0 / 9XY0 | Accepted malformed opcodes whose last digit isn't 0 | Rejected as unknown opcodes |
+| Memory | `pc` and `index` could point past 4 KB, reading and writing outside `memory[]` | All memory addresses masked with `& 0xFFF` |
+| Stack | A 17th nested call wrote past `stack[16]`; a return with an empty stack read below it | Both refused with an error message |
+| Keys | EX9E/EXA1 used `key[VX]` with VX up to 255 | Key number masked to `0-F` |
+| ROM loading | A missing, empty or oversized ROM left an empty machine printing "Unknown opcode" forever | `load_rom` returns false and the program exits before opening a window |
+| Command line | `--speed fast` crashed with an uncaught `std::stoi` exception; `--speed 0` froze; missing values, typos and extra paths were silently misread | Full validation with a clear error and usage text |
+| Main loop | After a stall (window drag, debugger pause, sleep) the loop ran hundreds of catch-up frames at once | Frame time capped at 0.25 s |
+| Speed keys | The `+` key's limit was a hard-coded `10`, separate from the speed table | Limit derived from the table size |
+| Audio | 2048-sample buffer (46 ms) delayed or cut short beeps that last only a few frames | 512-sample buffer (12 ms) |
+| Audio | The beep flag was a plain `bool` shared between the main and audio threads (a data race) | `std::atomic<bool>` |
+| Rendering | No GPU driver (VMs, remote desktops) meant the program exited | Falls back to SDL's software renderer |
+| Build | The Makefile ignored header changes, so `main.o` could keep an outdated `Chip8` layout | Dependency tracking with `-MMD -MP` |
+| Integration | Merging the CRT feature silently reverted the save-state keys, audio fixes and argument checks in `main.cpp` | Caught in code review and restored on top of the CRT code |
 
 ## ROMs
 
@@ -205,4 +225,3 @@ A 440 Hz square wave (musical note A) plays while `sound_timer > 0`. The audio b
 
 - [Chip-8 ROMs Archive](https://github.com/kripod/chip8-roms)
 - [Cowgod's Chip-8 Technical Reference](http://devernay.free.fr/hacks/chip8/C8TECH10.HTM)
-- [AI usage disclosure](AI_USAGE.md)
