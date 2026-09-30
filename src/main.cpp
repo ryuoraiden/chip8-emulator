@@ -15,10 +15,15 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <atomic>
 
 const int SCALE = 10; // Each pixel is 10x10 screen pixels
 const int WIDTH = 64*SCALE;
 const int HEIGHT = 32*SCALE;
+
+const int SAMPLE_RATE = 44100; // Audio samples per second
+const int TONE_HZ = 440; // Beep pitch (A4)
+const int HALF_WAVE = SAMPLE_RATE / (2 * TONE_HZ); // Samples per half of the square wave
 const int MAX_SPEED_MULTIPLIER = 100; // 8000 IPS x 100 still fits in an int
 
 // Keyboard mapping
@@ -46,11 +51,11 @@ void audio_callback(void* userdata, uint8_t* stream, int len){
     int16_t* audio_buffer = (int16_t*) stream;
     int samples = len/2;
 
-    bool* beeping = (bool*) userdata;
+    std::atomic<bool>* beeping = (std::atomic<bool>*) userdata; // Written by the main thread, read here on the audio thread
     for(int i=0; i<samples; i++){
-        if(*beeping){
-            // Generating 440Hz sqaure wave
-            int16_t value = ((sample_index++ / 100) % 2) ? 3000 : -3000;
+        if(beeping->load()){
+            // Generating a TONE_HZ square wave: flip sign every HALF_WAVE samples
+            int16_t value = ((sample_index++ / HALF_WAVE) % 2) ? 3000 : -3000;
             audio_buffer[i] = value;
         }
         else{
@@ -77,15 +82,18 @@ const std::vector<Palette> PALETTES = {
     {"Red Phosphor", {25, 5, 5, 255}, {255, 70, 45, 255}},
 };
 
+const std::vector<int> SPEEDS = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 4000, 8000}; // Instructions per second for each +/- step
+
 float phosphor[64 * 32] = {0.0f};
 
 void print_usage(const char* program){
-    std::cerr << "Usage: " << program << " [--speed N] [--palette name|index] <ROM file>\n"
+    std::cerr << "Usage: " << program << " [--speed N] [--palette name|index] [--crt] <ROM file>\n"
               << "  --speed N     speed multiplier, a whole number from 1 to " << MAX_SPEED_MULTIPLIER << "\n"
               << "  --palette P   color scheme, by index or by name (quote names with spaces):\n";
     for(size_t i = 0; i < PALETTES.size(); i++){
         std::cerr << "                  " << i << ": " << PALETTES[i].name << "\n";
     }
+    std::cerr << "  --crt         CRT look: curvature, scanlines, bloom and phosphor afterglow\n";
     std::cerr << "Keys: + / - speed, [ / ] palette, F5 save state, F9 load state, Esc quit\n";
 }
 
@@ -190,7 +198,7 @@ void draw_graphics_crt(SDL_Renderer* renderer, SDL_Texture* texture, uint32_t* p
     SDL_RenderPresent(renderer);
 }
 
-void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed){
+void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed, const std::string& save_path){
     SDL_Event event;
 
     while(SDL_PollEvent(&event)){
@@ -199,6 +207,14 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
             if(event.key.keysym.sym == SDLK_ESCAPE) running = false;
             
             if(!event.key.repeat) {
+                if(event.key.keysym.sym == SDLK_F5) {
+                    if(chip8.save_state(save_path)) std::cout << "State saved to " << save_path << "\n";
+                    else std::cerr << "Could not save state to " << save_path << "\n";
+                }
+                if(event.key.keysym.sym == SDLK_F9) {
+                    if(chip8.load_state(save_path)) std::cout << "State loaded from " << save_path << "\n";
+                    else std::cerr << "Could not load state from " << save_path << " (missing or not a valid save)\n";
+                }
                 if(event.key.keysym.sym == SDLK_RIGHTBRACKET) {
                     palette_index = (palette_index + 1) % PALETTES.size();
                     palette_changed = true;
@@ -208,7 +224,7 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
                     palette_changed = true;
                 }
                 if(event.key.keysym.sym == SDLK_PLUS || event.key.keysym.sym == SDLK_EQUALS || event.key.keysym.sym == SDLK_KP_PLUS) {
-                    if(speed_index < 10) { speed_index++; speed_changed = true; }
+                    if(speed_index + 1 < (int)SPEEDS.size()) { speed_index++; speed_changed = true; }
                 }
                 if(event.key.keysym.sym == SDLK_MINUS || event.key.keysym.sym == SDLK_KP_MINUS) {
                     if(speed_index > 0) { speed_index--; speed_changed = true; }
@@ -239,10 +255,15 @@ int main(int argc, char** argv){
             print_usage(argv[0]);
             return 0;
         }
+        if((arg == "--speed" || arg == "--palette") && i + 1 >= argc) {
+            std::cerr << "Error: " << arg << " needs a value\n";
+            print_usage(argv[0]);
+            return 1;
+        }
         if(arg == "--crt") {
             crt_enabled = true;
         }
-        else if(arg == "--speed" && i + 1 < argc) {
+        else if(arg == "--speed") {
             std::string s_arg = argv[++i];
             bool valid = false;
             try {
@@ -260,7 +281,7 @@ int main(int argc, char** argv){
                 return 1;
             }
         }
-        else if(arg == "--palette" && i + 1 < argc) {
+        else if(arg == "--palette") {
             std::string p_arg = argv[++i];
             bool found = false;
             try {
@@ -307,18 +328,23 @@ int main(int argc, char** argv){
         print_usage(argv[0]);
         return 1;
     }
+
+    Chip8 chip8;
+    if(!chip8.load_rom(rom_file)) return 1; // Stop before opening a window for a game that isn't there
+    const std::string save_path = rom_file + ".sav"; // e.g. roms/Pong.ch8.sav
+
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
         std::cerr << "SDL Error: " << SDL_GetError() << std::endl;
         return 1;
     }
     // Audio setup
-    bool beeping = false;
+    std::atomic<bool> beeping(false); // Shared with the audio thread, so it must be atomic
     SDL_AudioSpec want, have;
     SDL_zero(want);
-    want.freq = 44100;
+    want.freq = SAMPLE_RATE;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
-    want.samples = 2048;
+    want.samples = 512; // ~12 ms per buffer, so beeps a few frames long start and stop on time
     want.callback = audio_callback;
     want.userdata = &beeping;
 
@@ -333,6 +359,10 @@ int main(int argc, char** argv){
         return 1;
     }
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if(!renderer){ // No usable GPU driver (VMs, remote desktops): draw on the CPU instead
+        std::cerr << "No GPU renderer (" << SDL_GetError() << "), using software rendering" << std::endl;
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    }
     if(!renderer){
         std::cerr << "Renderer error: " << SDL_GetError() << std::endl;
         SDL_DestroyWindow(window);
@@ -342,12 +372,12 @@ int main(int argc, char** argv){
 
     SDL_Texture* screen_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
     uint32_t* pixels = new uint32_t[WIDTH * HEIGHT];
-
-    Chip8 chip8;
-    chip8.load_rom(rom_file.c_str());
+    if(crt_enabled && !screen_texture){
+        std::cerr << "CRT effect unavailable (" << SDL_GetError() << "), using the normal display" << std::endl;
+        crt_enabled = false;
+    }
     
     bool running = true;
-    int speeds[] = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 4000, 8000};
     int speed_index = 4; // 500 default
     bool speed_changed   = true;
     int palette_index = initial_palette;
@@ -357,21 +387,23 @@ int main(int argc, char** argv){
     uint64_t last_counter = SDL_GetPerformanceCounter();
     double frame_accumulator = 0.0;
     double cycle_accumulator = 0.0;
+    const double MAX_DT = 0.25; // Catch up at most 15 frames after a stall; drop anything longer
 
     while(running){
-        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed);
+        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed, save_path);
         
         uint64_t current_counter = SDL_GetPerformanceCounter();
         double dt = (double)(current_counter - last_counter) / perf_freq;
         last_counter = current_counter;
-        
+        if(dt > MAX_DT) dt = MAX_DT; // e.g. window dragged, debugger paused, laptop suspended
+
         frame_accumulator += dt;
         bool frame_processed = false;
 
         while(frame_accumulator >= 1.0 / 60.0){
             frame_accumulator -= 1.0 / 60.0;
             
-            int current_ips = speeds[speed_index] * speed_multiplier;
+            int current_ips = SPEEDS[speed_index] * speed_multiplier;
             if (speed_changed || palette_changed) {
                 if (speed_changed) std::cout << "Speed changed to: " << current_ips << " IPS\n";
                 if (palette_changed) std::cout << "Palette changed to: " << PALETTES[palette_index].name << "\n";
