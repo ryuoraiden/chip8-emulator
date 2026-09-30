@@ -51,26 +51,35 @@ void Chip8::load_fonts(){
     for(int i=0; i<80; i++) memory[i] = chip8_fontset[i];
 }
 
-void Chip8::load_rom(const std::string& filename){
+bool Chip8::load_rom(const std::string& filename){
     std::ifstream file(filename, std::ios::binary | std::ios::ate);
 
     if(!file.is_open()){
         std::cerr << "Failed to open ROM: " << filename << std::endl;
-        return;
+        return false;
     }
 
     std::streamsize size = file.tellg();
     file.seekg(0, std::ios::beg);
 
+    if(size <= 0){ // Empty file, or not a regular file at all
+        std::cerr << "ROM is empty or unreadable: " << filename << std::endl;
+        return false;
+    }
     if(size > (4096-512)){ // 512 reserved for fonts/interpreter
         std::cerr << "ROM too large to fit in memory" << std::endl;
-        return;
+        return false;
     }
 
     file.read((char*)(memory+512),size);
+    if(!file){
+        std::cerr << "Failed to read ROM: " << filename << std::endl;
+        return false;
+    }
     file.close();
 
     std::cout << "Loaded ROM: " << filename << std::endl;
+    return true;
 }
 
 // Save state file layout: "CH8S", a version byte, then the fields below in this exact order.
@@ -155,6 +164,11 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 case 0x00EE: // Returns from subroutine
+                    if(sp == 0){ // Nothing to return to: skip instead of reading below the stack
+                        std::cerr << "Stack underflow at 0x" << std::hex << pc << std::endl;
+                        pc += 2;
+                        break;
+                    }
                     pc = stack[--sp];
                     pc += 2;
                     break;
@@ -167,6 +181,11 @@ void Chip8::emulate_cycle(){
             pc = opcode & 0x0FFF;
             break;
         case 0x2000: // 2XXX = Call subroutine at XXX
+            if(sp >= 16){ // All 16 levels used: skip instead of writing past the stack
+                std::cerr << "Stack overflow at 0x" << std::hex << pc << std::endl;
+                pc += 2;
+                break;
+            }
             stack[sp++] = pc;
             pc = opcode & 0x0FFF;
             break;
@@ -316,11 +335,11 @@ void Chip8::emulate_cycle(){
         case 0xE000: 
             switch(opcode & 0x00FF){
                 case 0x009E: // EX9E = skip next instr. if key[v[x]] is pressed
-                    if(key[v[(opcode & 0x0F00) >> 8]] != 0) pc += 4;
+                    if(key[v[(opcode & 0x0F00) >> 8] & 0xF] != 0) pc += 4; // & 0xF keeps the key number inside key[16]
                     else pc += 2;
                     break;
                 case 0x00A1: // EXA1 = skip next instr. if key[v[x]] is not pressed
-                    if(key[v[(opcode & 0x0F00) >> 8]] == 0) pc += 4;
+                    if(key[v[(opcode & 0x0F00) >> 8] & 0xF] == 0) pc += 4;
                     else pc += 2;
                     break;
                 default:

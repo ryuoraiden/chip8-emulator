@@ -13,6 +13,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <atomic>
 
 const int SCALE = 10; // Each pixel is 10x10 screen pixels
 const int WIDTH = 64*SCALE;
@@ -47,9 +48,9 @@ void audio_callback(void* userdata, uint8_t* stream, int len){
     int16_t* audio_buffer = (int16_t*) stream;
     int samples = len/2;
 
-    bool* beeping = (bool*) userdata;
+    std::atomic<bool>* beeping = (std::atomic<bool>*) userdata; // Written by the main thread, read here on the audio thread
     for(int i=0; i<samples; i++){
-        if(*beeping){
+        if(beeping->load()){
             // Generating a TONE_HZ square wave: flip sign every HALF_WAVE samples
             int16_t value = ((sample_index++ / HALF_WAVE) % 2) ? 3000 : -3000;
             audio_buffer[i] = value;
@@ -232,12 +233,17 @@ int main(int argc, char** argv){
         print_usage(argv[0]);
         return 1;
     }
+
+    Chip8 chip8;
+    if(!chip8.load_rom(rom_file)) return 1; // Stop before opening a window for a game that isn't there
+    const std::string save_path = rom_file + ".sav"; // e.g. roms/Pong.ch8.sav
+
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
         std::cerr << "SDL Error: " << SDL_GetError() << std::endl;
         return 1;
     }
     // Audio setup
-    bool beeping = false;
+    std::atomic<bool> beeping(false); // Shared with the audio thread, so it must be atomic
     SDL_AudioSpec want, have;
     SDL_zero(want);
     want.freq = SAMPLE_RATE;
@@ -258,6 +264,10 @@ int main(int argc, char** argv){
         return 1;
     }
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if(!renderer){ // No usable GPU driver (VMs, remote desktops): draw on the CPU instead
+        std::cerr << "No GPU renderer (" << SDL_GetError() << "), using software rendering" << std::endl;
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    }
     if(!renderer){
         std::cerr << "Renderer error: " << SDL_GetError() << std::endl;
         SDL_DestroyWindow(window);
@@ -265,9 +275,6 @@ int main(int argc, char** argv){
         return 1;
     }
 
-    Chip8 chip8;
-    chip8.load_rom(rom_file.c_str());
-    const std::string save_path = rom_file + ".sav"; // e.g. roms/Pong.ch8.sav
     
     bool running = true;
     int speed_index = 4; // 500 default
