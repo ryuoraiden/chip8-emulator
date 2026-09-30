@@ -169,8 +169,9 @@ void Chip8::emulate_cycle(){
                     break;
                 }
                 case 0x0006: { // v[x] >>= 1, v[F] = LSB
-                    v[0xF] = v[(opcode & 0x0F00) >> 8] & 0x1;
-                    v[(opcode & 0x0F00) >> 8] >>= 1;
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    v[(opcode & 0x0F00) >> 8] = vx >> 1;
+                    v[0xF] = vx & 0x1;
                     pc += 2;
                     break;
                 }
@@ -182,11 +183,13 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 }
-                case 0x000E: // v[x] <<= 1, v[F] = MSB
-                    v[0xF] = v[(opcode & 0x0F00) >> 8] >> 7;  // Save MSB
-                    v[(opcode & 0x0F00) >> 8] <<= 1;
+                case 0x000E: { // v[x] <<= 1, v[F] = MSB
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    v[(opcode & 0x0F00) >> 8] = vx << 1;
+                    v[0xF] = vx >> 7;
                     pc += 2;
                     break;
+                }
                 default:
                     std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
                     pc += 2;
