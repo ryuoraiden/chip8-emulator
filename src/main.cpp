@@ -78,6 +78,17 @@ const std::vector<Palette> PALETTES = {
     {"Red Phosphor", {25, 5, 5, 255}, {255, 70, 45, 255}},
 };
 
+const int MAX_SPEED_MULTIPLIER = 100; // 8000 IPS x 100 still fits in an int
+
+void print_usage(const char* program){
+    std::cerr << "Usage: " << program << " [--speed N] [--palette name|index] <ROM file>\n"
+              << "  --speed N     speed multiplier, a whole number from 1 to " << MAX_SPEED_MULTIPLIER << "\n"
+              << "  --palette P   color scheme, by index or by name (quote names with spaces):\n";
+    for(size_t i = 0; i < PALETTES.size(); i++){
+        std::cerr << "                  " << i << ": " << PALETTES[i].name << "\n";
+    }
+}
+
 void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette){
     // Clear screen
     SDL_SetRenderDrawColor(renderer, palette.bg.r, palette.bg.g, palette.bg.b, 255);
@@ -139,9 +150,33 @@ int main(int argc, char** argv){
 
     for(int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if(arg == "--speed" && i + 1 < argc) {
-            speed_multiplier = std::stoi(argv[++i]);
-        } else if(arg == "--palette" && i + 1 < argc) {
+        if(arg == "--help" || arg == "-h") {
+            print_usage(argv[0]);
+            return 0;
+        }
+        if((arg == "--speed" || arg == "--palette") && i + 1 >= argc) {
+            std::cerr << "Error: " << arg << " needs a value\n";
+            print_usage(argv[0]);
+            return 1;
+        }
+        if(arg == "--speed") {
+            std::string s_arg = argv[++i];
+            bool valid = false;
+            try {
+                size_t pos;
+                int n = std::stoi(s_arg, &pos);
+                if(pos == s_arg.length() && n >= 1 && n <= MAX_SPEED_MULTIPLIER) {
+                    speed_multiplier = n;
+                    valid = true;
+                }
+            } catch(...) {}
+
+            if(!valid) {
+                std::cerr << "Error: --speed expects a whole number from 1 to " << MAX_SPEED_MULTIPLIER << ", got \"" << s_arg << "\"\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else if(arg == "--palette") {
             std::string p_arg = argv[++i];
             bool found = false;
             try {
@@ -162,13 +197,28 @@ int main(int argc, char** argv){
                     }
                 }
             }
+
+            if(!found) {
+                std::cerr << "Error: unknown palette \"" << p_arg << "\"\n";
+                print_usage(argv[0]);
+                return 1;
+            }
+        } else if(arg.rfind("--", 0) == 0) { // starts with "--" but isn't an option we know
+            std::cerr << "Error: unknown option " << arg << "\n";
+            print_usage(argv[0]);
+            return 1;
         } else {
+            if(!rom_file.empty()) {
+                std::cerr << "Error: more than one ROM given (" << rom_file << ", " << arg << ")\n";
+                print_usage(argv[0]);
+                return 1;
+            }
             rom_file = arg;
         }
     }
 
     if(rom_file.empty()){
-        std::cerr << "Usage: " << argv[0] << " [--speed N] [--palette name|index] <ROM file>" << std::endl;
+        print_usage(argv[0]);
         return 1;
     }
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
