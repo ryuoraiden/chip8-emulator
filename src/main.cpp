@@ -182,7 +182,7 @@ int main(int argc, char** argv){
     want.freq = SAMPLE_RATE;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
-    want.samples = 2048;
+    want.samples = 512; // ~12 ms per buffer, so beeps a few frames long start and stop on time
     want.callback = audio_callback;
     want.userdata = &beeping;
 
