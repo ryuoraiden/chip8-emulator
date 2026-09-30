@@ -268,6 +268,7 @@ int main(int argc, char** argv){
     uint64_t last_counter = SDL_GetPerformanceCounter();
     double frame_accumulator = 0.0;
     double cycle_accumulator = 0.0;
+    const double MAX_DT = 0.25; // Catch up at most 15 frames after a stall; drop anything longer
 
     while(running){
         handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed);
@@ -275,7 +276,8 @@ int main(int argc, char** argv){
         uint64_t current_counter = SDL_GetPerformanceCounter();
         double dt = (double)(current_counter - last_counter) / perf_freq;
         last_counter = current_counter;
-        
+        if(dt > MAX_DT) dt = MAX_DT; // e.g. window dragged, debugger paused, laptop suspended
+
         frame_accumulator += dt;
         bool frame_processed = false;
 
