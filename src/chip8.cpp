@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <cstdio>
 #include <random>
 
 uint8_t chip8_fontset[80] = {
@@ -70,6 +71,68 @@ void Chip8::load_rom(const std::string& filename){
     file.close();
 
     std::cout << "Loaded ROM: " << filename << std::endl;
+}
+
+// Save state file layout: "CH8S", a version byte, then the fields below in this exact order.
+// Fields are written one by one (not the whole object) so padding and future class changes can't corrupt saves.
+const char STATE_MAGIC[4] = {'C', 'H', '8', 'S'};
+const uint8_t STATE_VERSION = 1;
+
+bool Chip8::save_state(const std::string& path) const{
+    // Write to a temporary file first, so a failed save can't destroy the previous one
+    std::string tmp_path = path + ".tmp";
+    std::ofstream file(tmp_path, std::ios::binary);
+    if(!file.is_open()) return false;
+
+    file.write(STATE_MAGIC, sizeof(STATE_MAGIC));
+    file.write(reinterpret_cast<const char*>(&STATE_VERSION), sizeof(STATE_VERSION));
+    file.write(reinterpret_cast<const char*>(memory), sizeof(memory));
+    file.write(reinterpret_cast<const char*>(v), sizeof(v));
+    file.write(reinterpret_cast<const char*>(&index), sizeof(index));
+    file.write(reinterpret_cast<const char*>(&pc), sizeof(pc));
+    file.write(reinterpret_cast<const char*>(stack), sizeof(stack));
+    file.write(reinterpret_cast<const char*>(&sp), sizeof(sp));
+    file.write(reinterpret_cast<const char*>(&delay_timer), sizeof(delay_timer));
+    file.write(reinterpret_cast<const char*>(&sound_timer), sizeof(sound_timer));
+    file.write(reinterpret_cast<const char*>(display), sizeof(display));
+    file.close();
+
+    if(!file){
+        std::remove(tmp_path.c_str());
+        return false;
+    }
+    return std::rename(tmp_path.c_str(), path.c_str()) == 0; // Replaces the old save in one step
+}
+
+bool Chip8::load_state(const std::string& path){
+    std::ifstream file(path, std::ios::binary);
+    if(!file.is_open()) return false;
+
+    char magic[4];
+    uint8_t version = 0;
+    file.read(magic, sizeof(magic));
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if(!file || std::memcmp(magic, STATE_MAGIC, sizeof(magic)) != 0 || version != STATE_VERSION) return false;
+
+    // Read into a separate machine, so a bad file can't damage the running game
+    Chip8 loaded;
+    file.read(reinterpret_cast<char*>(loaded.memory), sizeof(loaded.memory));
+    file.read(reinterpret_cast<char*>(loaded.v), sizeof(loaded.v));
+    file.read(reinterpret_cast<char*>(&loaded.index), sizeof(loaded.index));
+    file.read(reinterpret_cast<char*>(&loaded.pc), sizeof(loaded.pc));
+    file.read(reinterpret_cast<char*>(loaded.stack), sizeof(loaded.stack));
+    file.read(reinterpret_cast<char*>(&loaded.sp), sizeof(loaded.sp));
+    file.read(reinterpret_cast<char*>(&loaded.delay_timer), sizeof(loaded.delay_timer));
+    file.read(reinterpret_cast<char*>(&loaded.sound_timer), sizeof(loaded.sound_timer));
+    file.read(reinterpret_cast<char*>(loaded.display), sizeof(loaded.display));
+
+    if(!file) return false; // File ended early
+    if(file.peek() != EOF) return false; // Extra bytes: not a file we wrote
+    if(loaded.sp > 16) return false; // Impossible stack depth
+
+    *this = loaded; // Copy every field at once; loaded.key is all zeros, so no key stays stuck
+    draw_flag = true;
+    return true;
 }
 
 void Chip8::update_timers(){

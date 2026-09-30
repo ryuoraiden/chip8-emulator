@@ -3,5 +3,9 @@
 *.d
 chip8
 
+# save states (F5)
+*.sav
+*.sav.tmp
+
 # local secrets
 .env

@@ -10,6 +10,8 @@ class Chip8{
         void load_rom(const std::string& filename); // To load a game file
         void emulate_cycle(); // To execute one instruction
         void update_timers(); // Decrement delay/sound timers
+        bool save_state(const std::string& path) const; // Write the whole machine state to a file
+        bool load_state(const std::string& path); // Restore it; a bad file leaves the machine untouched
         bool draw_flag; // When we need to redraw the screen;
         uint8_t display[64*32];
         uint8_t key[16]; // Keyboard of 16 keys

@@ -89,6 +89,7 @@ void print_usage(const char* program){
     for(size_t i = 0; i < PALETTES.size(); i++){
         std::cerr << "                  " << i << ": " << PALETTES[i].name << "\n";
     }
+    std::cerr << "Keys: + / - speed, [ / ] palette, F5 save state, F9 load state, Esc quit\n";
 }
 
 void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette){
@@ -108,7 +109,7 @@ void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette)
     SDL_RenderPresent(renderer);
 }
 
-void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed){
+void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed, const std::string& save_path){
     SDL_Event event;
 
     while(SDL_PollEvent(&event)){
@@ -117,6 +118,14 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
             if(event.key.keysym.sym == SDLK_ESCAPE) running = false;
             
             if(!event.key.repeat) {
+                if(event.key.keysym.sym == SDLK_F5) {
+                    if(chip8.save_state(save_path)) std::cout << "State saved to " << save_path << "\n";
+                    else std::cerr << "Could not save state to " << save_path << "\n";
+                }
+                if(event.key.keysym.sym == SDLK_F9) {
+                    if(chip8.load_state(save_path)) std::cout << "State loaded from " << save_path << "\n";
+                    else std::cerr << "Could not load state from " << save_path << " (missing or not a valid save)\n";
+                }
                 if(event.key.keysym.sym == SDLK_RIGHTBRACKET) {
                     palette_index = (palette_index + 1) % PALETTES.size();
                     palette_changed = true;
@@ -258,6 +267,7 @@ int main(int argc, char** argv){
 
     Chip8 chip8;
     chip8.load_rom(rom_file.c_str());
+    const std::string save_path = rom_file + ".sav"; // e.g. roms/Pong.ch8.sav
     
     bool running = true;
     int speed_index = 4; // 500 default
@@ -272,7 +282,7 @@ int main(int argc, char** argv){
     const double MAX_DT = 0.25; // Catch up at most 15 frames after a stall; drop anything longer
 
     while(running){
-        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed);
+        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed, save_path);
         
         uint64_t current_counter = SDL_GetPerformanceCounter();
         double dt = (double)(current_counter - last_counter) / perf_freq;
