@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <vector>
 
 const int SCALE = 10; // Each pixel is 10x10 screen pixels
 const int WIDTH = 64*SCALE;
@@ -56,12 +57,29 @@ void audio_callback(void* userdata, uint8_t* stream, int len){
     }
 }
 
-void draw_graphics(SDL_Renderer* renderer, Chip8& chip8){
+struct Palette {
+    std::string name;
+    SDL_Color bg;
+    SDL_Color fg;
+};
+
+const std::vector<Palette> PALETTES = {
+    // Original
+    {"Classic Green Screen", {0, 0, 0, 255}, {0, 255, 0, 255}},
+    {"Amber CRT", {30, 20, 0, 255}, {255, 180, 0, 255}},
+    {"Neon High-Contrast", {0, 0, 0, 255}, {0, 255, 255, 255}},
+    {"Monochrome White", {0, 0, 0, 255}, {255, 255, 255, 255}},
+    {"Inverse", {235, 235, 235, 255}, {20, 20, 20, 255}},
+    {"Synthwave '84", {38, 35, 53, 255}, {255, 126, 219, 255}},
+    {"Red Phosphor", {25, 5, 5, 255}, {255, 70, 45, 255}},
+};
+
+void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette){
     // Clear screen
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_SetRenderDrawColor(renderer, palette.bg.r, palette.bg.g, palette.bg.b, 255);
     SDL_RenderClear(renderer);
-    // Drawing white pixels
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    // Drawing lit pixels
+    SDL_SetRenderDrawColor(renderer, palette.fg.r, palette.fg.g, palette.fg.b, 255);
     for(int y=0; y<32; y++){
         for(int x=0; x<64; x++){
             if(chip8.display[x + (y*64)] == 1){
@@ -73,7 +91,7 @@ void draw_graphics(SDL_Renderer* renderer, Chip8& chip8){
     SDL_RenderPresent(renderer);
 }
 
-void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed){
+void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed){
     SDL_Event event;
 
     while(SDL_PollEvent(&event)){
@@ -82,6 +100,14 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
             if(event.key.keysym.sym == SDLK_ESCAPE) running = false;
             
             if(!event.key.repeat) {
+                if(event.key.keysym.sym == SDLK_RIGHTBRACKET) {
+                    palette_index = (palette_index + 1) % PALETTES.size();
+                    palette_changed = true;
+                }
+                if(event.key.keysym.sym == SDLK_LEFTBRACKET) {
+                    palette_index = (palette_index - 1 + PALETTES.size()) % PALETTES.size();
+                    palette_changed = true;
+                }
                 if(event.key.keysym.sym == SDLK_PLUS || event.key.keysym.sym == SDLK_EQUALS || event.key.keysym.sym == SDLK_KP_PLUS) {
                     if(speed_index < 10) { speed_index++; speed_changed = true; }
                 }
@@ -105,18 +131,40 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
 int main(int argc, char** argv){
     int speed_multiplier = 1;
     std::string rom_file = "";
+    int initial_palette = 0;
 
     for(int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if(arg == "--speed" && i + 1 < argc) {
             speed_multiplier = std::stoi(argv[++i]);
+        } else if(arg == "--palette" && i + 1 < argc) {
+            std::string p_arg = argv[++i];
+            bool found = false;
+            try {
+                size_t pos;
+                int p_idx = std::stoi(p_arg, &pos);
+                if(pos == p_arg.length() && p_idx >= 0 && (size_t)p_idx < PALETTES.size()) {
+                    initial_palette = p_idx;
+                    found = true;
+                }
+            } catch(...) {}
+            
+            if(!found) {
+                for(size_t j=0; j<PALETTES.size(); j++) {
+                    if(PALETTES[j].name == p_arg) {
+                        initial_palette = j;
+                        found = true;
+                        break;
+                    }
+                }
+            }
         } else {
             rom_file = arg;
         }
     }
 
     if(rom_file.empty()){
-        std::cerr << "Usage: " << argv[0] << " [--speed N] <ROM file>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " [--speed N] [--palette name|index] <ROM file>" << std::endl;
         return 1;
     }
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
@@ -159,6 +207,8 @@ int main(int argc, char** argv){
     int speeds[] = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 4000, 8000};
     int speed_index = 4; // 500 default
     bool speed_changed   = true;
+    int palette_index = initial_palette;
+    bool palette_changed = true;
 
     uint64_t perf_freq = SDL_GetPerformanceFrequency();
     uint64_t last_counter = SDL_GetPerformanceCounter();
@@ -166,7 +216,7 @@ int main(int argc, char** argv){
     double cycle_accumulator = 0.0;
 
     while(running){
-        handle_input(chip8, running, speed_index, speed_changed);
+        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed);
         
         uint64_t current_counter = SDL_GetPerformanceCounter();
         double dt = (double)(current_counter - last_counter) / perf_freq;
@@ -179,11 +229,13 @@ int main(int argc, char** argv){
             frame_accumulator -= 1.0 / 60.0;
             
             int current_ips = speeds[speed_index] * speed_multiplier;
-            if (speed_changed) {
+            if (speed_changed || palette_changed) {
+                if (speed_changed) std::cout << "Speed changed to: " << current_ips << " IPS\n";
+                if (palette_changed) std::cout << "Palette changed to: " << PALETTES[palette_index].name << "\n";
                 speed_changed = false;
-                std::string title = "Chip-8 Emulator - Speed: " + std::to_string(current_ips) + " IPS";
+                palette_changed = false;
+                std::string title = "Chip-8 Emulator - Speed: " + std::to_string(current_ips) + " IPS - Palette: " + PALETTES[palette_index].name;
                 SDL_SetWindowTitle(window, title.c_str());
-                std::cout << "Speed changed to: " << current_ips << " IPS\n";
             }
             
             cycle_accumulator += (double)current_ips / 60.0;
@@ -199,7 +251,7 @@ int main(int argc, char** argv){
         
         if (frame_processed) {
             beeping = (chip8.get_sound_timer() > 0);
-            draw_graphics(renderer, chip8);
+            draw_graphics(renderer, chip8, PALETTES[palette_index]);
         }
         SDL_Delay(1);
     }
