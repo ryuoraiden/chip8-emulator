@@ -10,6 +10,8 @@
 #include <SDL2/SDL_timer.h>
 #include <SDL2/SDL_video.h>
 #include <cstdint>
+#include <cmath>
+#include <algorithm>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -74,6 +76,8 @@ const std::vector<Palette> PALETTES = {
     {"Red Phosphor", {25, 5, 5, 255}, {255, 70, 45, 255}},
 };
 
+float phosphor[64 * 32] = {0.0f};
+
 void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette){
     // Clear screen
     SDL_SetRenderDrawColor(renderer, palette.bg.r, palette.bg.g, palette.bg.b, 255);
@@ -88,6 +92,90 @@ void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette)
             }
         }
     }
+    SDL_RenderPresent(renderer);
+}
+
+void draw_graphics_crt(SDL_Renderer* renderer, SDL_Texture* texture, uint32_t* pixels, Chip8& chip8, const Palette& palette){
+    // Update phosphor afterglow
+    for(int i=0; i<64*32; i++){
+        if(chip8.display[i]) {
+            phosphor[i] = 1.0f; // Fully lit
+        } else {
+            phosphor[i] *= 0.85f; // Decay
+        }
+    }
+
+    // CPU Shader for CRT effects
+    for(int py = 0; py < HEIGHT; py++) {
+        for(int px = 0; px < WIDTH; px++) {
+            // Normalize coordinates to [-1, 1]
+            float nx = (px / (float)WIDTH) * 2.0f - 1.0f;
+            float ny = (py / (float)HEIGHT) * 2.0f - 1.0f;
+
+            // Screen curvature
+            float r2 = nx*nx + ny*ny;
+            float distortion = 1.0f + r2 * 0.12f; // Slight curvature
+            float cx = nx * distortion;
+            float cy = ny * distortion;
+
+            // Map back to [0, 1]
+            float u = cx * 0.5f + 0.5f;
+            float v = cy * 0.5f + 0.5f;
+
+            float intensity = 0.0f;
+            if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f) {
+                // Map to 64x32 CHIP-8 resolution
+                float sample_x = u * 64.0f;
+                float sample_y = v * 32.0f;
+                
+                int ix = (int)sample_x;
+                int iy = (int)sample_y;
+                
+                if (ix >= 0 && ix < 64 && iy >= 0 && iy < 32) {
+                    intensity = phosphor[ix + iy * 64];
+                    
+                    // Bloom: sample neighbors in 64x32 space
+                    float bloom = 0.0f;
+                    for (int dy = -1; dy <= 1; dy++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            if (dx == 0 && dy == 0) continue;
+                            int nx2 = ix + dx;
+                            int ny2 = iy + dy;
+                            if (nx2 >= 0 && nx2 < 64 && ny2 >= 0 && ny2 < 32) {
+                                float w = 1.0f / (1.0f + dx*dx + dy*dy);
+                                bloom += phosphor[nx2 + ny2 * 64] * w;
+                            }
+                        }
+                    }
+                    intensity += bloom * 0.25f; // Bloom strength
+
+                    // Scanlines: one per CHIP-8 vertical pixel
+                    float scanline = sinf(v * 32.0f * 3.14159265f * 2.0f); 
+                    intensity *= (0.85f + 0.15f * scanline);
+                    
+                    // Vignette (darken corners)
+                    float vignette = 1.0f - r2 * 0.3f;
+                    intensity *= std::max(0.0f, vignette);
+                }
+            }
+
+            // Blend colors
+            float r_f = palette.bg.r + (palette.fg.r - palette.bg.r) * intensity;
+            float g_f = palette.bg.g + (palette.fg.g - palette.bg.g) * intensity;
+            float b_f = palette.bg.b + (palette.fg.b - palette.bg.b) * intensity;
+
+            Uint8 r = (Uint8)std::clamp(r_f, 0.0f, 255.0f);
+            Uint8 g = (Uint8)std::clamp(g_f, 0.0f, 255.0f);
+            Uint8 b = (Uint8)std::clamp(b_f, 0.0f, 255.0f);
+
+            // Write pixel (ARGB8888)
+            pixels[px + py * WIDTH] = (255 << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
+
+    SDL_UpdateTexture(texture, NULL, pixels, WIDTH * sizeof(uint32_t));
+    SDL_RenderClear(renderer);
+    SDL_RenderCopy(renderer, texture, NULL, NULL);
     SDL_RenderPresent(renderer);
 }
 
@@ -132,12 +220,17 @@ int main(int argc, char** argv){
     int speed_multiplier = 1;
     std::string rom_file = "";
     int initial_palette = 0;
+    bool crt_enabled = false;
 
     for(int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if(arg == "--speed" && i + 1 < argc) {
+        if (arg == "--crt") {
+            crt_enabled = true;
+        }
+        else if(arg == "--speed" && i + 1 < argc) {
             speed_multiplier = std::stoi(argv[++i]);
-        } else if(arg == "--palette" && i + 1 < argc) {
+        } 
+        else if(arg == "--palette" && i + 1 < argc) {
             std::string p_arg = argv[++i];
             bool found = false;
             try {
@@ -158,7 +251,8 @@ int main(int argc, char** argv){
                     }
                 }
             }
-        } else {
+        } 
+        else {
             rom_file = arg;
         }
     }
@@ -199,6 +293,9 @@ int main(int argc, char** argv){
         SDL_Quit();
         return 1;
     }
+
+    SDL_Texture* screen_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, WIDTH, HEIGHT);
+    uint32_t* pixels = new uint32_t[WIDTH * HEIGHT];
 
     Chip8 chip8;
     chip8.load_rom(rom_file.c_str());
@@ -251,11 +348,16 @@ int main(int argc, char** argv){
         
         if (frame_processed) {
             beeping = (chip8.get_sound_timer() > 0);
-            draw_graphics(renderer, chip8, PALETTES[palette_index]);
+            if (crt_enabled)
+                draw_graphics_crt(renderer, screen_texture, pixels, chip8, PALETTES[palette_index]);
+            else
+                draw_graphics(renderer, chip8, PALETTES[palette_index]);
         }
         SDL_Delay(1);
     }
     if(audio_device != 0) SDL_CloseAudioDevice(audio_device);
+    delete[] pixels;
+    SDL_DestroyTexture(screen_texture);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
