@@ -11,6 +11,7 @@
 #include <SDL2/SDL_video.h>
 #include <cstdint>
 #include <iostream>
+#include <string>
 
 const int SCALE = 10; // Each pixel is 10x10 screen pixels
 const int WIDTH = 64*SCALE;
@@ -72,14 +73,23 @@ void draw_graphics(SDL_Renderer* renderer, Chip8& chip8){
     SDL_RenderPresent(renderer);
 }
 
-void handle_input(Chip8& chip8, bool& running){
+void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed){
     SDL_Event event;
 
     while(SDL_PollEvent(&event)){
         if(event.type == SDL_QUIT) running = false;
         if(event.type == SDL_KEYDOWN){
             if(event.key.keysym.sym == SDLK_ESCAPE) running = false;
-            // Check which Chip-8 key was pressed
+            
+            if(!event.key.repeat) {
+                if(event.key.keysym.sym == SDLK_PLUS || event.key.keysym.sym == SDLK_EQUALS || event.key.keysym.sym == SDLK_KP_PLUS) {
+                    if(speed_index < 10) { speed_index++; speed_changed = true; }
+                }
+                if(event.key.keysym.sym == SDLK_MINUS || event.key.keysym.sym == SDLK_KP_MINUS) {
+                    if(speed_index > 0) { speed_index--; speed_changed = true; }
+                }
+            }
+
             for(int i=0; i<16; i++){
                 if(event.key.keysym.sym == keymap[i]) chip8.key[i] = 1;
             }
@@ -93,8 +103,20 @@ void handle_input(Chip8& chip8, bool& running){
 }
 
 int main(int argc, char** argv){
-    if(argc < 2){
-        std::cerr << "Usage: " << argv[0] << " <ROM file>" << std::endl;
+    int speed_multiplier = 1;
+    std::string rom_file = "";
+
+    for(int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if(arg == "--speed" && i + 1 < argc) {
+            speed_multiplier = std::stoi(argv[++i]);
+        } else {
+            rom_file = arg;
+        }
+    }
+
+    if(rom_file.empty()){
+        std::cerr << "Usage: " << argv[0] << " [--speed N] <ROM file>" << std::endl;
         return 1;
     }
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
@@ -131,19 +153,55 @@ int main(int argc, char** argv){
     }
 
     Chip8 chip8;
-    chip8.load_rom(argv[1]);
+    chip8.load_rom(rom_file.c_str());
     
     bool running = true;
-    while(running){
-        handle_input(chip8, running);
-        for(int i=0; i<10; i++){
-            chip8.emulate_cycle();
-        }
-        chip8.update_timers();
-        SDL_Delay(16); // ~60 FPS
+    int speeds[] = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 4000, 8000};
+    int speed_index = 4; // 500 default
+    bool speed_changed   = true;
 
-        beeping = (chip8.get_sound_timer() > 0);
-        draw_graphics(renderer, chip8);
+    uint64_t perf_freq = SDL_GetPerformanceFrequency();
+    uint64_t last_counter = SDL_GetPerformanceCounter();
+    double frame_accumulator = 0.0;
+    double cycle_accumulator = 0.0;
+
+    while(running){
+        handle_input(chip8, running, speed_index, speed_changed);
+        
+        uint64_t current_counter = SDL_GetPerformanceCounter();
+        double dt = (double)(current_counter - last_counter) / perf_freq;
+        last_counter = current_counter;
+        
+        frame_accumulator += dt;
+        bool frame_processed = false;
+
+        while(frame_accumulator >= 1.0 / 60.0){
+            frame_accumulator -= 1.0 / 60.0;
+            
+            int current_ips = speeds[speed_index] * speed_multiplier;
+            if (speed_changed) {
+                speed_changed = false;
+                std::string title = "Chip-8 Emulator - Speed: " + std::to_string(current_ips) + " IPS";
+                SDL_SetWindowTitle(window, title.c_str());
+                std::cout << "Speed changed to: " << current_ips << " IPS\n";
+            }
+            
+            cycle_accumulator += (double)current_ips / 60.0;
+            int cycles = (int)cycle_accumulator;
+            cycle_accumulator -= cycles;
+            
+            for(int i = 0; i < cycles; i++){
+                chip8.emulate_cycle();
+            }
+            chip8.update_timers();
+            frame_processed = true;
+        }
+        
+        if (frame_processed) {
+            beeping = (chip8.get_sound_timer() > 0);
+            draw_graphics(renderer, chip8);
+        }
+        SDL_Delay(1);
     }
     if(audio_device != 0) SDL_CloseAudioDevice(audio_device);
     SDL_DestroyRenderer(renderer);
