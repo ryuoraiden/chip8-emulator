@@ -16,6 +16,11 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <filesystem>
+#include <cctype>
+#include <map>
+#include <array>
+#include <cstring>
 
 const int SCALE = 10; // Each pixel is 10x10 screen pixels
 const int WIDTH = 64*SCALE;
@@ -86,15 +91,181 @@ const std::vector<int> SPEEDS = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 
 
 float phosphor[64 * 32] = {0.0f};
 
+// --- ROM browser (SDL2 + stdlib only) ---
+namespace fs = std::filesystem;
+
+// 5x7 bitmap font, rows use low 5 bits (bit 4 = left pixel). Uppercase + digits + punctuation.
+static const std::map<char, std::array<uint8_t,7>>& browser_font(){
+    static const std::map<char, std::array<uint8_t,7>> f = {
+        {' ', {0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
+        {'!', {0x04,0x04,0x04,0x04,0x04,0x00,0x04}},
+        {'"', {0x0A,0x0A,0x0A,0x00,0x00,0x00,0x00}},
+        {'\'',{0x04,0x04,0x08,0x00,0x00,0x00,0x00}},
+        {'(', {0x02,0x04,0x08,0x08,0x08,0x04,0x02}},
+        {')', {0x08,0x04,0x02,0x02,0x02,0x04,0x08}},
+        {'*', {0x00,0x04,0x15,0x0E,0x15,0x04,0x00}},
+        {'+', {0x00,0x04,0x04,0x1F,0x04,0x04,0x00}},
+        {',', {0x00,0x00,0x00,0x00,0x0C,0x04,0x08}},
+        {'-', {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}},
+        {'.', {0x00,0x00,0x00,0x00,0x0C,0x0C,0x00}},
+        {'/', {0x01,0x01,0x02,0x04,0x08,0x10,0x10}},
+        {'0', {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}},
+        {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}},
+        {'2', {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}},
+        {'3', {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}},
+        {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}},
+        {'5', {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}},
+        {'6', {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}},
+        {'7', {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}},
+        {'8', {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}},
+        {'9', {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}},
+        {':', {0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00}},
+        {';', {0x00,0x0C,0x0C,0x00,0x0C,0x04,0x08}},
+        {'=', {0x00,0x00,0x1F,0x00,0x1F,0x00,0x00}},
+        {'?', {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}},
+        {'[', {0x0E,0x08,0x08,0x08,0x08,0x08,0x0E}},
+        {']', {0x0E,0x02,0x02,0x02,0x02,0x02,0x0E}},
+        {'_', {0x00,0x00,0x00,0x00,0x00,0x00,0x1F}},
+        {'A', {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}},
+        {'B', {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}},
+        {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
+        {'D', {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}},
+        {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}},
+        {'F', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}},
+        {'G', {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}},
+        {'H', {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}},
+        {'I', {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}},
+        {'J', {0x07,0x02,0x02,0x02,0x02,0x12,0x0C}},
+        {'K', {0x11,0x12,0x14,0x18,0x14,0x12,0x11}},
+        {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}},
+        {'M', {0x11,0x1B,0x15,0x11,0x11,0x11,0x11}},
+        {'N', {0x11,0x19,0x19,0x15,0x13,0x13,0x11}},
+        {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
+        {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}},
+        {'Q', {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}},
+        {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
+        {'S', {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}},
+        {'T', {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}},
+        {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}},
+        {'V', {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}},
+        {'W', {0x11,0x11,0x11,0x15,0x15,0x1B,0x11}},
+        {'X', {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}},
+        {'Y', {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}},
+        {'Z', {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}},
+    };
+    return f;
+}
+
+static void draw_browser_text(SDL_Renderer* r, const std::string& s, int x, int y, int sc, SDL_Color c){
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, 255);
+    const auto& f = browser_font();
+    static const std::array<uint8_t,7> blank = {0,0,0,0,0,0,0};
+    int cx = x;
+    for(char ch : s){
+        char u = (char)std::toupper((unsigned char)ch);
+        auto it = f.find(u);
+        const auto& g = (it == f.end()) ? blank : it->second;
+        for(int row = 0; row < 7; row++)
+            for(int col = 0; col < 5; col++)
+                if(g[row] & (0x10 >> col)){
+                    SDL_Rect rc = {cx + col*sc, y + row*sc, sc, sc};
+                    SDL_RenderFillRect(r, &rc);
+                }
+        cx += 6*sc;
+        if(cx >= WIDTH) return; // clip
+    }
+}
+
+struct BrowserEntry { std::string label; fs::path full; bool isDir = false; bool isUp = false; };
+struct Browser { fs::path dir; std::vector<BrowserEntry> items; int sel = 0; int scroll = 0; std::string error; };
+
+static bool browser_is_rom(const fs::path& p){
+    std::string e = p.extension().string();
+    for(char& c : e) c = (char)std::tolower((unsigned char)c);
+    return e == ".ch8" || e == ".c8" || e == ".rom" || e == ".bin";
+}
+
+static void browser_refresh(Browser& b){
+    b.items.clear();
+    b.items.push_back({"..", b.dir / "..", true, true});
+    std::error_code ec;
+    fs::directory_iterator it(b.dir, ec);
+    if(ec){ b.error = "UNREADABLE DIR"; b.sel = 0; b.scroll = 0; return; }
+    std::vector<fs::path> dirs, files;
+    for(; it != fs::directory_iterator(); it.increment(ec)){
+        if(ec){ b.error = "UNREADABLE DIR"; break; }
+        std::error_code ec2;
+        bool d = it->is_directory(ec2);
+        if(ec2) continue;
+        if(d) dirs.push_back(it->path());
+        else if(it->is_regular_file(ec2) && browser_is_rom(it->path())) files.push_back(it->path());
+    }
+    auto byname = [](const fs::path& a, const fs::path& b){ return a.filename().string() < b.filename().string(); };
+    std::sort(dirs.begin(), dirs.end(), byname);
+    std::sort(files.begin(), files.end(), byname);
+    for(auto& d : dirs) b.items.push_back({d.filename().string() + "/", d, true, false});
+    for(auto& f : files) b.items.push_back({f.filename().string(), f, false, false});
+    if(b.sel >= (int)b.items.size()) b.sel = (int)b.items.size() - 1;
+    if(b.sel < 0) b.sel = 0;
+    if(b.scroll > b.sel) b.scroll = b.sel;
+}
+
+static void browser_go_up(Browser& b){
+    fs::path p = b.dir.parent_path();
+    if(p.empty() || p == b.dir) return;
+    b.dir = p; b.sel = 0; b.scroll = 0; b.error.clear();
+    browser_refresh(b);
+}
+
+static void draw_browser(SDL_Renderer* r, Browser& b, const Palette& pal){
+    SDL_SetRenderDrawColor(r, pal.bg.r, pal.bg.g, pal.bg.b, 255);
+    SDL_RenderClear(r);
+    const int FS = 2, rowH = 7*FS + 6, headerH = 26, footerH = 22;
+    SDL_SetRenderDrawColor(r, pal.fg.r, pal.fg.g, pal.fg.b, 255);
+    draw_browser_text(r, b.dir.string().substr(0, 52), 8, 6, FS, pal.fg);
+    int visible = (HEIGHT - headerH - footerH) / rowH;
+    if(visible < 1) visible = 1;
+    if(b.sel < b.scroll) b.scroll = b.sel;
+    if(b.sel >= b.scroll + visible) b.scroll = b.sel - visible + 1;
+    for(int i = 0; i < visible; i++){
+        int idx = b.scroll + i;
+        if(idx >= (int)b.items.size()) break;
+        int y = headerH + i*rowH;
+        if(idx == b.sel){ // highlighted selection
+            SDL_Rect bg = {4, y - 3, WIDTH - 8, rowH};
+            SDL_RenderFillRect(r, &bg);
+        }
+        SDL_Color c = (idx == b.sel) ? pal.bg : pal.fg;
+        std::string label = (b.items[idx].isDir ? "> " : "  ") + b.items[idx].label;
+        draw_browser_text(r, label.substr(0, 50), 10, y, FS, c);
+    }
+    SDL_SetRenderDrawColor(r, pal.fg.r, pal.fg.g, pal.fg.b, 255);
+    std::string foot = b.error.empty() ? "UP/DN MOVE PGUP/DN JUMP ENTER OPEN F1 GAME" : b.error.substr(0, 50);
+    draw_browser_text(r, foot, 8, HEIGHT - 18, 2, pal.fg);
+    SDL_RenderPresent(r);
+}
+
+static bool start_rom(Chip8& c, const std::string& path, std::string& romName, std::string& savePath, std::string& err){
+    c.reset(); // clear regs/memory/display/timers before loading the next ROM
+    std::memset(phosphor, 0, sizeof(phosphor));
+    std::memset(c.key, 0, sizeof(c.key));
+    if(!c.load_rom(path)){ err = "FAILED: " + path; return false; }
+    romName = fs::path(path).filename().string();
+    savePath = path + ".sav";
+    err.clear();
+    return true;
+}
+
 void print_usage(const char* program){
-    std::cerr << "Usage: " << program << " [--speed N] [--palette name|index] [--crt] <ROM file>\n"
+    std::cerr << "Usage: " << program << " [--speed N] [--palette name|index] [--crt] [<ROM file>]\n"
               << "  --speed N     speed multiplier, a whole number from 1 to " << MAX_SPEED_MULTIPLIER << "\n"
               << "  --palette P   color scheme, by index or by name (quote names with spaces):\n";
     for(size_t i = 0; i < PALETTES.size(); i++){
         std::cerr << "                  " << i << ": " << PALETTES[i].name << "\n";
     }
     std::cerr << "  --crt         CRT look: curvature, scanlines, bloom and phosphor afterglow\n";
-    std::cerr << "Keys: + / - speed, [ / ] palette, F5 save state, F9 load state, Esc quit\n";
+    std::cerr << "Keys: + / - speed, [ / ] palette, F1 browser, F5 save state, F9 load state, Esc quit\n";
+    std::cerr << "Browser: Up/Down move, PgUp/PgDn jump, Enter open/launch, Backspace up, Esc quit\n";
 }
 
 void draw_graphics(SDL_Renderer* renderer, Chip8& chip8, const Palette& palette){
@@ -198,7 +369,7 @@ void draw_graphics_crt(SDL_Renderer* renderer, SDL_Texture* texture, uint32_t* p
     SDL_RenderPresent(renderer);
 }
 
-void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed, const std::string& save_path){
+void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_changed, int& palette_index, bool& palette_changed, const std::string& save_path, bool& to_browser){
     SDL_Event event;
 
     while(SDL_PollEvent(&event)){
@@ -207,6 +378,13 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
             if(event.key.keysym.sym == SDLK_ESCAPE) running = false;
             
             if(!event.key.repeat) {
+                if(event.key.keysym.sym == SDLK_F1) { // back to browser; reset() before next load
+                    chip8.reset();
+                    std::memset(chip8.key, 0, sizeof(chip8.key));
+                    std::memset(phosphor, 0, sizeof(phosphor));
+                    to_browser = true;
+                    continue;
+                }
                 if(event.key.keysym.sym == SDLK_F5) {
                     if(chip8.save_state(save_path)) std::cout << "State saved to " << save_path << "\n";
                     else std::cerr << "Could not save state to " << save_path << "\n";
@@ -324,14 +502,7 @@ int main(int argc, char** argv){
         }
     }
 
-    if(rom_file.empty()){
-        print_usage(argv[0]);
-        return 1;
-    }
-
     Chip8 chip8;
-    if(!chip8.load_rom(rom_file)) return 1; // Stop before opening a window for a game that isn't there
-    const std::string save_path = rom_file + ".sav"; // e.g. roms/Pong.ch8.sav
 
     if(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0){
         std::cerr << "SDL Error: " << SDL_GetError() << std::endl;
@@ -382,6 +553,34 @@ int main(int argc, char** argv){
     bool speed_changed   = true;
     int palette_index = initial_palette;
     bool palette_changed = true;
+    std::string cur_rom, save_path; // save_path e.g. roms/Pong.ch8.sav
+
+    auto set_title = [&](int ips){
+        std::string t = "Chip-8 Emulator - Speed: " + std::to_string(ips) + " IPS - Palette: " + PALETTES[palette_index].name;
+        if(!cur_rom.empty()) t += " - " + cur_rom;
+        SDL_SetWindowTitle(window, t.c_str());
+    };
+
+    // Browser state; no ROM on argv -> start here, failed load -> stay here with error.
+    Browser browser;
+    { std::error_code ec; browser.dir = fs::current_path(ec); if(ec) browser.dir = "."; }
+    browser_refresh(browser);
+    bool in_browser = false, to_browser = false;
+    if(!rom_file.empty()){
+        std::string err;
+        if(start_rom(chip8, rom_file, cur_rom, save_path, err)){ in_browser = false; }
+        else {
+            in_browser = true;
+            browser.error = err;
+            std::error_code ec; // open next to the failed ROM if possible
+            fs::path p = fs::path(rom_file).parent_path();
+            if(!p.empty() && fs::is_directory(p, ec)) browser.dir = p;
+            browser_refresh(browser);
+            if(!browser.error.empty() && browser.error.find("UNREADABLE") == 0) browser.error = err;
+            else if(!err.empty()) browser.error = err;
+        }
+    } else in_browser = true;
+    if(in_browser) SDL_SetWindowTitle(window, "Chip-8 Emulator - Select ROM");
 
     uint64_t perf_freq = SDL_GetPerformanceFrequency();
     uint64_t last_counter = SDL_GetPerformanceCounter();
@@ -390,7 +589,54 @@ int main(int argc, char** argv){
     const double MAX_DT = 0.25; // Catch up at most 15 frames after a stall; drop anything longer
 
     while(running){
-        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed, save_path);
+        if(to_browser){ // F1 from game: drop back to browser, no burst on return
+            to_browser = false; in_browser = true; beeping = false;
+            frame_accumulator = 0.0; cycle_accumulator = 0.0;
+            last_counter = SDL_GetPerformanceCounter();
+            SDL_SetWindowTitle(window, "Chip-8 Emulator - Select ROM");
+        }
+        if(in_browser){ // browser owns all keys here; CHIP-8 keypad stays untouched
+            const int browVisible = (HEIGHT - 26 - 22) / (7*2 + 6);
+            SDL_Event ev;
+            while(SDL_PollEvent(&ev)){
+                if(ev.type == SDL_QUIT) running = false;
+                else if(ev.type == SDL_KEYDOWN && !ev.key.repeat){
+                    SDL_Keycode k = ev.key.keysym.sym;
+                    if(k == SDLK_ESCAPE) running = false;
+                    else if(k == SDLK_UP){ if(browser.sel > 0) browser.sel--; }
+                    else if(k == SDLK_DOWN){ if(browser.sel + 1 < (int)browser.items.size()) browser.sel++; }
+                    else if(k == SDLK_PAGEUP) browser.sel -= browVisible;
+                    else if(k == SDLK_PAGEDOWN) browser.sel += browVisible;
+                    else if(k == SDLK_BACKSPACE) browser_go_up(browser);
+                    else if(k == SDLK_RETURN || k == SDLK_KP_ENTER){
+                        if(browser.sel >= 0 && browser.sel < (int)browser.items.size()){
+                            const auto& en = browser.items[browser.sel];
+                            if(en.isUp || en.isDir){
+                                if(en.isUp) browser_go_up(browser);
+                                else { browser.dir = en.full; browser.sel = 0; browser.scroll = 0; browser.error.clear(); browser_refresh(browser); }
+                            } else {
+                                std::string err;
+                                if(start_rom(chip8, en.full.string(), cur_rom, save_path, err)){
+                                    in_browser = false;
+                                    speed_changed = palette_changed = true;
+                                    frame_accumulator = 0.0; cycle_accumulator = 0.0;
+                                    last_counter = SDL_GetPerformanceCounter();
+                                } else browser.error = err;
+                            }
+                        }
+                    }
+                    if(browser.sel < 0) browser.sel = 0;
+                    if(browser.sel >= (int)browser.items.size()) browser.sel = (int)browser.items.size() - 1;
+                }
+            }
+            if(!running) break;
+            beeping = false;
+            draw_browser(renderer, browser, PALETTES[palette_index]);
+            last_counter = SDL_GetPerformanceCounter(); // don't bill browsing time to the game
+            SDL_Delay(16);
+            continue;
+        }
+        handle_input(chip8, running, speed_index, speed_changed, palette_index, palette_changed, save_path, to_browser);
         
         uint64_t current_counter = SDL_GetPerformanceCounter();
         double dt = (double)(current_counter - last_counter) / perf_freq;
@@ -409,8 +655,7 @@ int main(int argc, char** argv){
                 if (palette_changed) std::cout << "Palette changed to: " << PALETTES[palette_index].name << "\n";
                 speed_changed = false;
                 palette_changed = false;
-                std::string title = "Chip-8 Emulator - Speed: " + std::to_string(current_ips) + " IPS - Palette: " + PALETTES[palette_index].name;
-                SDL_SetWindowTitle(window, title.c_str());
+                set_title(current_ips);
             }
             
             cycle_accumulator += (double)current_ips / 60.0;

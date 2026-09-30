@@ -29,6 +29,10 @@ Chip8::Chip8(){
     initialise();
 }
 
+void Chip8::reset(){
+    initialise();
+}
+
 void Chip8::initialise(){
     pc = 0x200;
     opcode = 0;

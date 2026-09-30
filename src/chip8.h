@@ -7,6 +7,7 @@
 class Chip8{
     public:
         Chip8();
+        void reset(); // Restore initial state so a new ROM can be loaded
         bool load_rom(const std::string& filename); // To load a game file; false if it can't be loaded
         void emulate_cycle(); // To execute one instruction
         void update_timers(); // Decrement delay/sound timers
