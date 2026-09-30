@@ -18,6 +18,10 @@ const int SCALE = 10; // Each pixel is 10x10 screen pixels
 const int WIDTH = 64*SCALE;
 const int HEIGHT = 32*SCALE;
 
+const int SAMPLE_RATE = 44100; // Audio samples per second
+const int TONE_HZ = 440; // Beep pitch (A4)
+const int HALF_WAVE = SAMPLE_RATE / (2 * TONE_HZ); // Samples per half of the square wave
+
 // Keyboard mapping
 uint8_t keymap[16] = {
     SDLK_x, // 0
@@ -46,8 +50,8 @@ void audio_callback(void* userdata, uint8_t* stream, int len){
     bool* beeping = (bool*) userdata;
     for(int i=0; i<samples; i++){
         if(*beeping){
-            // Generating 440Hz sqaure wave
-            int16_t value = ((sample_index++ / 100) % 2) ? 3000 : -3000;
+            // Generating a TONE_HZ square wave: flip sign every HALF_WAVE samples
+            int16_t value = ((sample_index++ / HALF_WAVE) % 2) ? 3000 : -3000;
             audio_buffer[i] = value;
         }
         else{
@@ -175,7 +179,7 @@ int main(int argc, char** argv){
     bool beeping = false;
     SDL_AudioSpec want, have;
     SDL_zero(want);
-    want.freq = 44100;
+    want.freq = SAMPLE_RATE;
     want.format = AUDIO_S16SYS;
     want.channels = 1;
     want.samples = 2048;
