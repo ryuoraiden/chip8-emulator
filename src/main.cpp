@@ -78,6 +78,8 @@ const std::vector<Palette> PALETTES = {
     {"Red Phosphor", {25, 5, 5, 255}, {255, 70, 45, 255}},
 };
 
+const std::vector<int> SPEEDS = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 4000, 8000}; // Instructions per second for each +/- step
+
 const int MAX_SPEED_MULTIPLIER = 100; // 8000 IPS x 100 still fits in an int
 
 void print_usage(const char* program){
@@ -124,7 +126,7 @@ void handle_input(Chip8& chip8, bool& running, int& speed_index, bool& speed_cha
                     palette_changed = true;
                 }
                 if(event.key.keysym.sym == SDLK_PLUS || event.key.keysym.sym == SDLK_EQUALS || event.key.keysym.sym == SDLK_KP_PLUS) {
-                    if(speed_index < 10) { speed_index++; speed_changed = true; }
+                    if(speed_index + 1 < (int)SPEEDS.size()) { speed_index++; speed_changed = true; }
                 }
                 if(event.key.keysym.sym == SDLK_MINUS || event.key.keysym.sym == SDLK_KP_MINUS) {
                     if(speed_index > 0) { speed_index--; speed_changed = true; }
@@ -258,7 +260,6 @@ int main(int argc, char** argv){
     chip8.load_rom(rom_file.c_str());
     
     bool running = true;
-    int speeds[] = {60, 120, 250, 350, 500, 750, 1000, 1500, 2000, 4000, 8000};
     int speed_index = 4; // 500 default
     bool speed_changed   = true;
     int palette_index = initial_palette;
@@ -284,7 +285,7 @@ int main(int argc, char** argv){
         while(frame_accumulator >= 1.0 / 60.0){
             frame_accumulator -= 1.0 / 60.0;
             
-            int current_ips = speeds[speed_index] * speed_multiplier;
+            int current_ips = SPEEDS[speed_index] * speed_multiplier;
             if (speed_changed || palette_changed) {
                 if (speed_changed) std::cout << "Speed changed to: " << current_ips << " IPS\n";
                 if (palette_changed) std::cout << "Palette changed to: " << PALETTES[palette_index].name << "\n";

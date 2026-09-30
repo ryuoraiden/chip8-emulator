@@ -203,7 +203,7 @@ void Chip8::emulate_cycle(){
                 else
                     pc += 2;
             } else {
-                std::cerr << "Unknwon opcode: 0x" << std::hex << opcode << std::endl;
+                std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
                 pc += 2;
             }
             break;
