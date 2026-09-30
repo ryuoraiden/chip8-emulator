@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <cstdio>
 #include <random>
 
 uint8_t chip8_fontset[80] = {
@@ -50,26 +51,97 @@ void Chip8::load_fonts(){
     for(int i=0; i<80; i++) memory[i] = chip8_fontset[i];
 }
 
-void Chip8::load_rom(const std::string& filename){
+bool Chip8::load_rom(const std::string& filename){
     std::ifstream file(filename, std::ios::binary | std::ios::ate);
 
     if(!file.is_open()){
         std::cerr << "Failed to open ROM: " << filename << std::endl;
-        return;
+        return false;
     }
 
     std::streamsize size = file.tellg();
     file.seekg(0, std::ios::beg);
 
+    if(size <= 0){ // Empty file, or not a regular file at all
+        std::cerr << "ROM is empty or unreadable: " << filename << std::endl;
+        return false;
+    }
     if(size > (4096-512)){ // 512 reserved for fonts/interpreter
         std::cerr << "ROM too large to fit in memory" << std::endl;
-        return;
+        return false;
     }
 
     file.read((char*)(memory+512),size);
+    if(!file){
+        std::cerr << "Failed to read ROM: " << filename << std::endl;
+        return false;
+    }
     file.close();
 
     std::cout << "Loaded ROM: " << filename << std::endl;
+    return true;
+}
+
+// Save state file layout: "CH8S", a version byte, then the fields below in this exact order.
+// Fields are written one by one (not the whole object) so padding and future class changes can't corrupt saves.
+const char STATE_MAGIC[4] = {'C', 'H', '8', 'S'};
+const uint8_t STATE_VERSION = 1;
+
+bool Chip8::save_state(const std::string& path) const{
+    // Write to a temporary file first, so a failed save can't destroy the previous one
+    std::string tmp_path = path + ".tmp";
+    std::ofstream file(tmp_path, std::ios::binary);
+    if(!file.is_open()) return false;
+
+    file.write(STATE_MAGIC, sizeof(STATE_MAGIC));
+    file.write(reinterpret_cast<const char*>(&STATE_VERSION), sizeof(STATE_VERSION));
+    file.write(reinterpret_cast<const char*>(memory), sizeof(memory));
+    file.write(reinterpret_cast<const char*>(v), sizeof(v));
+    file.write(reinterpret_cast<const char*>(&index), sizeof(index));
+    file.write(reinterpret_cast<const char*>(&pc), sizeof(pc));
+    file.write(reinterpret_cast<const char*>(stack), sizeof(stack));
+    file.write(reinterpret_cast<const char*>(&sp), sizeof(sp));
+    file.write(reinterpret_cast<const char*>(&delay_timer), sizeof(delay_timer));
+    file.write(reinterpret_cast<const char*>(&sound_timer), sizeof(sound_timer));
+    file.write(reinterpret_cast<const char*>(display), sizeof(display));
+    file.close();
+
+    if(!file){
+        std::remove(tmp_path.c_str());
+        return false;
+    }
+    return std::rename(tmp_path.c_str(), path.c_str()) == 0; // Replaces the old save in one step
+}
+
+bool Chip8::load_state(const std::string& path){
+    std::ifstream file(path, std::ios::binary);
+    if(!file.is_open()) return false;
+
+    char magic[4];
+    uint8_t version = 0;
+    file.read(magic, sizeof(magic));
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if(!file || std::memcmp(magic, STATE_MAGIC, sizeof(magic)) != 0 || version != STATE_VERSION) return false;
+
+    // Read into a separate machine, so a bad file can't damage the running game
+    Chip8 loaded;
+    file.read(reinterpret_cast<char*>(loaded.memory), sizeof(loaded.memory));
+    file.read(reinterpret_cast<char*>(loaded.v), sizeof(loaded.v));
+    file.read(reinterpret_cast<char*>(&loaded.index), sizeof(loaded.index));
+    file.read(reinterpret_cast<char*>(&loaded.pc), sizeof(loaded.pc));
+    file.read(reinterpret_cast<char*>(loaded.stack), sizeof(loaded.stack));
+    file.read(reinterpret_cast<char*>(&loaded.sp), sizeof(loaded.sp));
+    file.read(reinterpret_cast<char*>(&loaded.delay_timer), sizeof(loaded.delay_timer));
+    file.read(reinterpret_cast<char*>(&loaded.sound_timer), sizeof(loaded.sound_timer));
+    file.read(reinterpret_cast<char*>(loaded.display), sizeof(loaded.display));
+
+    if(!file) return false; // File ended early
+    if(file.peek() != EOF) return false; // Extra bytes: not a file we wrote
+    if(loaded.sp > 16) return false; // Impossible stack depth
+
+    *this = loaded; // Copy every field at once; loaded.key is all zeros, so no key stays stuck
+    draw_flag = true;
+    return true;
 }
 
 void Chip8::update_timers(){
@@ -92,6 +164,11 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 case 0x00EE: // Returns from subroutine
+                    if(sp == 0){ // Nothing to return to: skip instead of reading below the stack
+                        std::cerr << "Stack underflow at 0x" << std::hex << pc << std::endl;
+                        pc += 2;
+                        break;
+                    }
                     pc = stack[--sp];
                     pc += 2;
                     break;
@@ -104,6 +181,11 @@ void Chip8::emulate_cycle(){
             pc = opcode & 0x0FFF;
             break;
         case 0x2000: // 2XXX = Call subroutine at XXX
+            if(sp >= 16){ // All 16 levels used: skip instead of writing past the stack
+                std::cerr << "Stack overflow at 0x" << std::hex << pc << std::endl;
+                pc += 2;
+                break;
+            }
             stack[sp++] = pc;
             pc = opcode & 0x0FFF;
             break;
@@ -169,8 +251,9 @@ void Chip8::emulate_cycle(){
                     break;
                 }
                 case 0x0006: { // v[x] >>= 1, v[F] = LSB
-                    v[0xF] = v[(opcode & 0x0F00) >> 8] & 0x1;
-                    v[(opcode & 0x0F00) >> 8] >>= 1;
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    v[(opcode & 0x0F00) >> 8] = vx >> 1;
+                    v[0xF] = vx & 0x1;
                     pc += 2;
                     break;
                 }
@@ -182,11 +265,13 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 }
-                case 0x000E: // v[x] <<= 1, v[F] = MSB
-                    v[0xF] = v[(opcode & 0x0F00) >> 8] >> 7;  // Save MSB
-                    v[(opcode & 0x0F00) >> 8] <<= 1;
+                case 0x000E: { // v[x] <<= 1, v[F] = MSB
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    v[(opcode & 0x0F00) >> 8] = vx << 1;
+                    v[0xF] = vx >> 7;
                     pc += 2;
                     break;
+                }
                 default:
                     std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
                     pc += 2;
@@ -200,7 +285,7 @@ void Chip8::emulate_cycle(){
                 else
                     pc += 2;
             } else {
-                std::cerr << "Unknwon opcode: 0x" << std::hex << opcode << std::endl;
+                std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
                 pc += 2;
             }
             break;
@@ -250,11 +335,11 @@ void Chip8::emulate_cycle(){
         case 0xE000: 
             switch(opcode & 0x00FF){
                 case 0x009E: // EX9E = skip next instr. if key[v[x]] is pressed
-                    if(key[v[(opcode & 0x0F00) >> 8]] != 0) pc += 4;
+                    if(key[v[(opcode & 0x0F00) >> 8] & 0xF] != 0) pc += 4; // & 0xF keeps the key number inside key[16]
                     else pc += 2;
                     break;
                 case 0x00A1: // EXA1 = skip next instr. if key[v[x]] is not pressed
-                    if(key[v[(opcode & 0x0F00) >> 8]] == 0) pc += 4;
+                    if(key[v[(opcode & 0x0F00) >> 8] & 0xF] == 0) pc += 4;
                     else pc += 2;
                     break;
                 default:
@@ -277,7 +362,8 @@ void Chip8::emulate_cycle(){
                             break;
                         }
                     }
-                    pc += 2;
+                    // No key held: leave pc alone so this instruction runs again next cycle
+                    if(key_pressed) pc += 2;
                 }
                     break;
                 case 0x0015: // FX15 - delay_timer = v[x]
